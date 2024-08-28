@@ -13,7 +13,7 @@ in the DOUT signal and makes its DOUT Hi-Z at other times.
 
 * Chips are mounted on breakout boards.  KiCad files for these boards are [here](pcb).  Schematic and layout look like this:
 
-<img src="images/tac5_schematic.png" width="640" /> <img src="images/tac5_pcb.png" width="285" />
+<img src="images/tac5_schematic.png" width="480" /> <img src="images/tac5_pcb.png" width="214" />
 
 
 
