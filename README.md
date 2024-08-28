@@ -11,7 +11,7 @@ in the DOUT signal and makes its DOUT Hi-Z at other times.
 
 * In the example shown here, 4 TAC5212's are connected with BCLK, FSYNC, DOUT, DIN, SCL, and SDA in parallel.  On each chip, the differential DAC outputs are connected to the differential ADC inputs to provide test signals for the ADCs, i.e. OUT1P -> IN1P, OUT1M -> IN1M, OUT2P -> IN2P, OUT2M -> IN2M.
 
-* Chips are mounted on breakout boards.  KiCad files for these boards are [here](pcb).  Schematic and layout look like this:
+* Chips are mounted on [breakout boards](https://www.pcbway.com/project/shareproject/Breakout_board_for_the_TI_TAC5212_audio_codec_ecc0a61b.html).  KiCad files for these boards are [here](pcb).  Schematic and layout look like this:
 
 <img src="images/tac5_schematic.png" width="480" /> <img src="images/tac5_pcb.png" width="214" />
 
