@@ -1,18 +1,21 @@
 # tac5
 
-This code provides CircuitPython support for TI's TAC5xxx audio codecs on rp2040 processors.
+This repo describes PCBs and rp2040 CircuitPython support for TI's [TAC5xxx](https://www.ti.com/product/TAC5212) audio codecs.
 
-* `pcm.py` uses the rp2040 PIO to implement a PCM interface to the TAC5 which supports arbitrary numbers of channels, word sizes, and sample rates.
+* [`pcm.py`](pcm.py) uses the rp2040 PIO to implement a PCM interface to the TAC5 which supports arbitrary numbers of channels, word sizes, and sample rates.
 
-* `tac5.py` implements a TAC5 class which knows how to initialize the TAC5xxx over I2C, write to its DACs, and read from its ADCs.
+* [`tac5.py`](tac5.py) implements a TAC5 class which knows how to initialize the TAC5xxx over I2C, write to its DACs, and read from its ADCs.
 
-* If multiple TAC5xxx parts with different I2C addresses are present, they are assumed to be wired in parallel for multichannel operation and configured appropriately.  In this mode, each chip is assigned a time slot in the DOUT signal, and makes it Hi-Z at other times.  
+* If multiple TAC5xxx parts with different I2C addresses are present, they are assumed to be wired in parallel for multichannel operation and [configured]( https://docs.google.com/spreadsheets/d/1LnI_OwJfJHtquBkj7qKH8Fg3jmsCv9cRniIS2uqMfjU/edit?usp=sharing) appropriately.  In this mode, each chip uses one time slot
+in the DOUT signal and makes its DOUT Hi-Z at other times.  
 
 * In the example shown here, 4 TAC5212's are connected with BCLK, FSYNC, DOUT, DIN, SCL, and SDA in parallel.  On each chip, the differential DAC outputs are connected to the differential ADC inputs to provide test signals for the ADCs, i.e. OUT1P -> IN1P, OUT1M -> IN1M, OUT2P -> IN2P, OUT2M -> IN2M.
 
 * Chips are mounted on breakout boards.  KiCad files for these boards are [here](pcb).  Schematic and layout look like this:
 
-![images/]
+<img src="images/tac5_schematic.png" width="640" /> <img src="images/tac5_pcb.png" width="285" />
+
+
 
 ## Example
 
@@ -37,4 +40,12 @@ sample,record0,record1,record2,record3,record4,record5,record6,record7,
 9,-22490,6149,-21452,15331,10620,-23182,7417,18743,
 ...(115 more lines)
 ```
+
+When called without arguments, `play()` creates test output (right now sine waves of various frequencies separated by gaps) for each DAC channel and sets up the interface to repeatedly send the data to the DACs in the background.
+When `record()` is called without arguments, it creates a buffer the same size as the playing buffer, fills it with ADC samples, and prints out the returned data in
+CSV format.  The table below compares the DAC outputs as seen on a scope with the ADC outputs plotted on a spreadsheet:
+
+| DAC output |  &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;&nbsp; &nbsp; &nbsp;  | ADC output |
+| ---------- | ---- |---------- |
+| <img src="images/dac_output_example.png" width="280" />   | | <img src="images/adc_output_example.png" width="500" /> |
 
