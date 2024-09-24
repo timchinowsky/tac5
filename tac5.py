@@ -110,13 +110,16 @@ class TAC5():
             else:                
                 self.write_reg(0x1A, 0x00, address=a)  # TDM, 16 bit
             self.write_reg(0x78, 0xEE, address=a)      # Power up all enabled ADC and DAC channels
-            self.write_reg(0x72, 0x0A, address=a)      # disable ADC HPF
+            # self.write_reg(0x72, 0x0A, address=a)      # disable ADC HPF
+            self.write_reg(0x72, 0x8A, address=a)      # disable ADC HPF, ultra-low latency decimation filter
             self.write_reg(0x73, 0x0A, address=a)      # disable DAC HPF
             self.write_reg(0x1B, 0x40, address=a)      # transmit hi-Z for unused cycles
             
+            self.write_reg(0x50, 0x4A, address=a)
+            self.write_reg(0x55, 0x4A, address=a)
             
-            # self.write_reg(0x50, 0xA8, address=a)      # ADC1 SE INP1, 40k, rail-to-rail, 1 Vrms SE, 24kHz
-            # self.write_reg(0x55, 0xA8, address=a)      # ADC2 SE INP2, 40k, rail-to-rail, 1 Vrms SE, 24kHz
+            #self.write_reg(0x50, 0x2B, address=a)      # ADC1 diff, 40k, rail-to-rail, 2 Vrms SE, 96kHz
+            #self.write_reg(0x55, 0x2B, address=a)      # ADC2 diff, 40k, rail-to-rail, 2 Vrms SE, 96kHz
             # self.write_reg(0x64, 0x28, address=a)      # DAC1 SE
             # self.write_reg(0x6B, 0x28, address=a)      # DAC2 SE
 
@@ -143,38 +146,82 @@ class TAC5():
                         out_pin=self.out_pin,
                         in_pin=self.in_pin)
 
-    def play(self, buffer=None, loop=True, reset=False):
+    def play(self, buffer=None, loop=True, reset=False, length=None):
         if reset or self.pcm is None:
             self.configure()
         if buffer is None:
-            buffer = octave_wave(channels=self.channels, sample_width=self.width)
+            if length is None:
+                buffer = octave_wave(channels=self.channels, sample_width=self.width)
+            else:
+                buffer = octave_wave(channels=self.channels, sample_width=self.width, length=length)
             self.play_buffer = buffer
         print('playing...')
         self.pcm.pio.stop()
         self.pcm.pio.background_write(loop=buffer)
         self.pcm.pio.restart()
 
-    def record(self, buffer=None, reset=False):
+    def rec(self, buffer=None, reset=False, length=None):
         if reset or self.pcm is None:
             self.configure()
-        if buffer is None and self.record_buffer is None:
-            if self.play_buffer is not None:
+        if (buffer is None and self.record_buffer is None) or length is not None:
+            if self.play_buffer is not None and length is None:
                 buffer = array.array('L', [0] * len(self.play_buffer))
             else:
-                buffer = octave_wave(channels=self.channels, sample_width=self.width)
+                if length is None:
+                    buffer = octave_wave(channels=self.channels, sample_width=self.width)
+                else:
+                    buffer = octave_wave(channels=self.channels, sample_width=self.width, length=length)
                 buffer = array.array('L', [0] * len(buffer))
-        self.record_buffer = buffer
-        self.pcm.pio.readinto(buffer)
-        print('sample', end=',')
-        for j in range(self.channels):
-            print(f'record{j}', end=',')
-        print()
+            self.record_buffer = buffer
+        elif buffer is None:
+            buffer = self.record_buffer
+        else:
+            self.record_buffer = buffer
+        print('recording...')           
+        self.pcm.pio.background_read(loop=buffer)
+
+    def show(self, buffer):
+        print('sample', end=';')
+        for j in range(self.channels-1):
+            print(f'ch{j}', end=';')
+        print(f'ch{self.channels-1}')
         for i in range(len(buffer)//self.channels):
-            print(i,end=',')
-            for j in range(self.channels):
+            print(i,end=';')
+            for j in range(self.channels-1):
                 val = buffer[j+i*self.channels] << (32-self.width)
-                print(bits2int(val>>(32-self.width), self.width), end=',')
-            print()
+                print(bits2int(val>>(32-self.width), self.width), end=';')
+            val = buffer[(self.channels-1)+i*self.channels] << (32-self.width)
+            print(bits2int(val>>(32-self.width), self.width))
+
+    def record(self, buffer=None, reset=False, length=None):
+        if reset or self.pcm is None:
+            self.configure()
+        if (buffer is None and self.record_buffer is None) or length is not None:
+            if self.play_buffer is not None and length is None:
+                buffer = array.array('L', [0] * len(self.play_buffer))
+            else:
+                if length is None:
+                    buffer = octave_wave(channels=self.channels, sample_width=self.width)
+                else:
+                    buffer = octave_wave(channels=self.channels, sample_width=self.width, length=length)
+                buffer = array.array('L', [0] * len(buffer))
+            self.record_buffer = buffer
+        elif buffer is None:
+            buffer = self.record_buffer
+        else:
+            self.record_buffer = buffer
+        self.pcm.pio.readinto(buffer)
+        print('sample', end=';')
+        for j in range(self.channels-1):
+            print(f'record{j}', end=';')
+        print(f'record{self.channels-1}')
+        for i in range(len(buffer)//self.channels):
+            print(i,end=';')
+            for j in range(self.channels-1):
+                val = buffer[j+i*self.channels] << (32-self.width)
+                print(bits2int(val>>(32-self.width), self.width), end=';')
+            val = buffer[(self.channels-1)+i*self.channels] << (32-self.width)
+            print(bits2int(val>>(32-self.width), self.width))
 
     def playrecord(self, play_buffer=None, record_buffer=None, loop=False, reset=False):
         if reset or self.pcm is None:
