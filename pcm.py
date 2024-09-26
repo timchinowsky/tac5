@@ -15,38 +15,50 @@ class PCM():
         width=16,
         clk_pin=board.D5, # SYNC will be one higher, e.g. D6
         out_pin=board.D9,
-        in_pin=board.D10
+        in_pin=board.D10,
+        block=True
     ):
         self.channels = channels
         self.width = width
         self.clk_pin = clk_pin
         self.out_pin = out_pin
         self.in_pin = in_pin
+        self.block = block
+
         self.clock_multiplier = 12
         codec_clock = sample_rate * channels * width
         pio_clock = self.clock_multiplier * codec_clock
+
+        # PIO code implementing I/O of PCM frames with configurable
+        # word width and number of channels
+        # BCLK spends 6 clocks high, 6 clocks low
+        # Bits are output at BCLK rising edge and input at falling edge
+        # SYNC is high for the first bit in each frame 
+        # Blocking version blocks only on first word of frame,
+        # so that the first word written will always start a frame.
+
         self.pio_code = f"""
-            .program codec
+            .program codec_block
             .side_set 2
-                set x {channels-1} side 0b00
-                out pins 1 side 0b11 [1]
+            frame_loop:
+                pull {'block' if block else 'noblock'} side 0b00
+                out pins 1 side 0b11
+                set x {channels-1} side 0b11
                 set y {width-2} side 0b11 [3]
                 in pins 1 side 0b10
-                jmp out side 0b10 [4]
+                jmp bit_out side 0b10 [4]
             bit_loop:
-                mov x x side 0b00 [2]
+                jmp bit_out side 0b00 [3]
             word_loop:
-                mov x x side 0b00 
-            out:
-                out pins 1 side 0b01 [2]
-                mov x x side 0b01 [2]
-                in pins 1 side 0b00  
+                pull noblock side 0b00
+            bit_out:
+                out pins 1 side 0b01 [5]
+                in pins 1 side 0b00 
                 jmp y-- bit_loop side 0b00
-                set y {width-1} side 0b00 
-                pull noblock side 0b00 
+                set y {width-1} side 0b00
                 push noblock side 0b00
                 jmp x-- word_loop side 0b00
-        """
+            """
         self.pio_params = {
             "frequency": pio_clock,
             "first_out_pin": out_pin,
@@ -59,7 +71,7 @@ class PCM():
             "in_shift_right": False,
             "pull_threshold": 32,
             "wait_for_txstall": False,
-            "wrap_target": 0,
+            "wrap_target": 0,          
         }
         self.pio_instructions = adafruit_pioasm.assemble(self.pio_code)
         self.pio = rp2pio.StateMachine(self.pio_instructions, **self.pio_params)
@@ -80,3 +92,4 @@ class PCM():
             u32[i] = i << (32-self.bits)
         while True:
             self.pio.write(u32)
+

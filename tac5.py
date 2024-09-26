@@ -8,6 +8,9 @@ import math
 import os
 import sdcardio
 import storage
+
+
+import storage
 import time
 import usb_cdc
 
@@ -49,35 +52,58 @@ def octave_wave(length=100, channels=2, sample_width=None, pad_after=25, amplitu
             f = c + 1
             a = 2**(sample_width-1) - 1
             val = int(a * amplitude * math.sin(i/length * 2 * math.pi * f))
-            #val = f
-            # val = (c+(c<<4)+(c<<8)+(c<<12)) & ((1 << sample_width) - 1)
-            # wave[i*channels+c] = val << (wave_width-sample_width)
             wave[i*channels+c] = int2bits(val, sample_width) << (wave_width-sample_width)
     return wave
 
+def count_wave(length=100, channels=2, sample_width=None):
+    wave = array.array('L', [0] * (length * channels))
+    wave_width = 32
+    if sample_width is None:
+        sample_width = wave_width
+    for c in range(channels):
+        for i in range(length):
+            val = (i-(length//2)) * channels + c
+            wave[i*channels + c] = int2bits(val, sample_width) << (wave_width-sample_width)
+    return wave
 
 class TAC5():
-    def __init__(self, 
-                 address=None, 
-                 i2c=None, 
+    """
+    >>> import tac5
+    >>> t = tac5.TAC5(channels=2, width=8, sample_rate=12000, address=None)
+    >>> t.rec(length=10)
+    recording...
+    >>> t.play(length=10, test='count')
+    playing...
+    >>> t.show(t.record_once_buffer)
+    """
+    def __init__(self,
+                 address='scan',
+                 channels=None,
+                 i2c=None,
                  clk_pin=board.D5, # sync will be one higher, e.g. D6
-                 out_pin=board.D9, 
-                 in_pin=board.D10, 
+                 out_pin=board.D9,
+                 in_pin=board.D10,
                  width=16,
                  sample_rate=48000
                 ):
-        if i2c is None:
-            self.i2c = board.I2C()
+        if address is not None:
+            if i2c is not None:
+                self.i2c = i2c
+            else:
+                self.i2c = board.I2C()
+            if address=='scan':
+                self.address = [a for a in self.scan() if a>=0x50 and a<=0x53]
+            elif type(address)==int:
+                self.address = [address]
+            else:
+                self.address = address
         else:
-            self.i2c = i2c
-        if address is None:
-            self.address = [a for a in self.scan() if a>=0x50 and a<=0x53]
-        elif type(address)==int:
-            self.address = [address]
-        else:
-            self.address = address
+            self.address = []
         self.codecs = len(self.address)
-        self.channels = 2 * self.codecs
+        if channels is None:
+            self.channels = 2 * self.codecs
+        else:
+            self.channels = channels
         self.clk_pin = clk_pin
         self.out_pin = out_pin
         self.in_pin = in_pin
@@ -85,18 +111,19 @@ class TAC5():
         self.width = width
         self.sample_rate=sample_rate
         self.pcm = None
-        self.play_buffer = None
-        self.record_buffer = None
-    
+        self.play_once_buffer = None
+        self.play_loop_buffer = None
+        self.record_once_buffer = None
+        self.record_loop_buffer = None
+
     def __del__(self):
         del self.pcm
 
     def configure(self, address='all'):
-
         if self.pcm is not None:
             del self.pcm
-
-        for i, a in enumerate(self.address_list(address)):
+        addresses = self.address_list(address)
+        for i, a in enumerate(addresses):
             # reset and enable device
             self.write_reg(0x01, 1, address=a)         # Reset all registers to defaults
             time.sleep(0.1)
@@ -107,17 +134,17 @@ class TAC5():
                 self.write_reg(0x1A, 0x20, address=a)  # TDM, 24 bit
             elif self.width == 20:
                 self.write_reg(0x1A, 0x10, address=a)  # TDM, 20 bit
-            else:                
+            else:
                 self.write_reg(0x1A, 0x00, address=a)  # TDM, 16 bit
             self.write_reg(0x78, 0xEE, address=a)      # Power up all enabled ADC and DAC channels
             # self.write_reg(0x72, 0x0A, address=a)      # disable ADC HPF
             self.write_reg(0x72, 0x8A, address=a)      # disable ADC HPF, ultra-low latency decimation filter
             self.write_reg(0x73, 0x0A, address=a)      # disable DAC HPF
             self.write_reg(0x1B, 0x40, address=a)      # transmit hi-Z for unused cycles
-            
+
             self.write_reg(0x50, 0x4A, address=a)
             self.write_reg(0x55, 0x4A, address=a)
-            
+
             #self.write_reg(0x50, 0x2B, address=a)      # ADC1 diff, 40k, rail-to-rail, 2 Vrms SE, 96kHz
             #self.write_reg(0x55, 0x2B, address=a)      # ADC2 diff, 40k, rail-to-rail, 2 Vrms SE, 96kHz
             # self.write_reg(0x64, 0x28, address=a)      # DAC1 SE
@@ -141,57 +168,130 @@ class TAC5():
 
         self.pcm = pcm.PCM(channels=self.channels,
                         sample_rate=self.sample_rate,
-                        width=self.width, 
+                        width=self.width,
                         clk_pin=self.clk_pin,
                         out_pin=self.out_pin,
                         in_pin=self.in_pin)
 
-    def play(self, buffer=None, loop=True, reset=False, length=None):
+    def play(self, loop_buffer=None, once_buffer=None, loop=True, once=True, reset=False, length=None, test='octave', end=False):
+        if end:
+            self.pcm.pio.stop_background_write()
+            return
         if reset or self.pcm is None:
             self.configure()
-        if buffer is None:
+
+        if loop_buffer is None:
             if length is None:
-                buffer = octave_wave(channels=self.channels, sample_width=self.width)
+                if test=='octave':
+                    loop_buffer = octave_wave(channels=self.channels, sample_width=self.width)
+                else:
+                    loop_buffer = count_wave(channels=self.channels, sample_width=self.width)
             else:
-                buffer = octave_wave(channels=self.channels, sample_width=self.width, length=length)
-            self.play_buffer = buffer
-        print('playing...')
-        self.pcm.pio.stop()
-        self.pcm.pio.background_write(loop=buffer)
-        self.pcm.pio.restart()
+                if test=='octave':
+                    loop_buffer = octave_wave(channels=self.channels, sample_width=self.width, length=length)
+                else:
+                    loop_buffer = count_wave(channels=self.channels, sample_width=self.width, length=length)
+            self.play_loop_buffer = loop_buffer
+ 
+        if once_buffer is None:
+            if length is None:
+                if test=='octave':
+                    once_buffer = octave_wave(channels=self.channels, sample_width=self.width)
+                else:
+                    once_buffer = count_wave(channels=self.channels, sample_width=self.width)
+            else:
+                if test=='octave':
+                    once_buffer = octave_wave(channels=self.channels, sample_width=self.width, length=length)
+                else:
+                    once_buffer = count_wave(channels=self.channels, sample_width=self.width, length=length)
+            self.play_once_buffer = once_buffer
 
-    def rec(self, buffer=None, reset=False, length=None):
+        print('playing...')
+        if once:
+            if loop:
+                self.pcm.pio.background_write(once=self.play_once_buffer, loop=self.play_loop_buffer)
+            else:
+                self.pcm.pio.background_write(once=self.play_once_buffer)
+        elif loop:
+            self.pcm.pio.background_write(loop=self.play_loop_buffer)
+
+
+    def rec(self, loop_buffer=None, once_buffer=None, loop=True, once=True, reset=False, length=None, end=False):
+        if end:
+            self.pcm.pio.stop_background_read()
+            return
         if reset or self.pcm is None:
             self.configure()
-        if (buffer is None and self.record_buffer is None) or length is not None:
-            if self.play_buffer is not None and length is None:
-                buffer = array.array('L', [0] * len(self.play_buffer))
-            else:
-                if length is None:
-                    buffer = octave_wave(channels=self.channels, sample_width=self.width)
-                else:
-                    buffer = octave_wave(channels=self.channels, sample_width=self.width, length=length)
-                buffer = array.array('L', [0] * len(buffer))
-            self.record_buffer = buffer
-        elif buffer is None:
-            buffer = self.record_buffer
-        else:
-            self.record_buffer = buffer
-        print('recording...')           
-        self.pcm.pio.background_read(loop=buffer)
 
-    def show(self, buffer):
-        print('sample', end=';')
-        for j in range(self.channels-1):
-            print(f'ch{j}', end=';')
-        print(f'ch{self.channels-1}')
-        for i in range(len(buffer)//self.channels):
-            print(i,end=';')
+        if (loop_buffer is None and self.record_loop_buffer is None) or length is not None:
+            if self.play_loop_buffer is not None and length is None:
+                loop_buffer = array.array('L', [0] * len(self.play_loop_buffer))
+                self.record_loop_buffer = loop_buffer
+            elif length is not None:
+                loop_buffer = array.array('L', [0] * length * self.channels)
+                self.record_loop_buffer = loop_buffer
+            elif loop:
+                raise ValueError('No loop buffer specified!')
+        elif loop_buffer is None:
+            loop_buffer = self.record_loop_buffer
+        else:
+            self.record_loop_buffer = loop_buffer
+
+        if (once_buffer is None and self.record_once_buffer is None) or length is not None:
+            if self.record_once_buffer is not None and length is None:
+                once_buffer = array.array('L', [0] * len(self.play_once_buffer))
+                self.record_once_buffer = once_buffer
+            elif length is not None:
+                once_buffer = array.array('L', [0] * length * self.channels)
+                self.record_once_buffer = once_buffer
+            elif once:
+                raise ValueError('No once buffer specified!')
+        elif once_buffer is None:
+            once_buffer = self.record_once_buffer
+        else:
+            self.record_once_buffer = once_buffer
+
+        print('recording...')
+        if once:
+            if loop:
+                self.pcm.pio.background_read(once=self.record_once_buffer, loop=self.record_loop_buffer)
+            else:
+                self.pcm.pio.background_read(once=self.record_once_buffer)
+        elif loop:
+            self.pcm.pio.background_read(loop=self.record_loop_buffer)
+
+
+    def show(self, buffer, format='csv', shift=True):
+        if format=='csv':
+            print('sample', end=';')
             for j in range(self.channels-1):
-                val = buffer[j+i*self.channels] << (32-self.width)
-                print(bits2int(val>>(32-self.width), self.width), end=';')
-            val = buffer[(self.channels-1)+i*self.channels] << (32-self.width)
-            print(bits2int(val>>(32-self.width), self.width))
+                print(f'ch{j}', end=';')
+            print(f'ch{self.channels-1}')
+            for i in range(len(buffer)//self.channels):
+                print(i,end=';')
+                for j in range(self.channels-1):
+                    val = buffer[j+i*self.channels]
+                    if shift:
+                        val = val << (32-self.width)
+                    print(bits2int(val>>(32-self.width), self.width), end=';')
+                val = buffer[(self.channels-1)+i*self.channels]
+                if shift:
+                    val = val << (32-self.width)
+                print(bits2int(val>>(32-self.width), self.width))
+
+        elif format=='mu':
+            for i in range(len(buffer)//self.channels):
+                print('(', end='')
+                for j in range(self.channels-1):
+                    val = buffer[j+i*self.channels]
+                    if shift:
+                        val = val << (32-self.width)
+                    print(bits2int(val>>(32-self.width), self.width), end=',')
+                    time.sleep(0.01)
+                val = buffer[(self.channels-1)+i*self.channels]
+                if shift:                    
+                    val = val << (32-self.width)
+                print(bits2int(val>>(32-self.width), self.width), end=')\n')
 
     def record(self, buffer=None, reset=False, length=None):
         if reset or self.pcm is None:
@@ -267,7 +367,7 @@ class TAC5():
                 return address
             except:
                 ValueError('Address', address, 'not present')
-    
+
     def write_reg(self, reg, data, page=0, address='all'):
         while not self.i2c.try_lock():
             pass
@@ -300,14 +400,14 @@ class TAC5():
             read_data.append(data[0])
         self.i2c.unlock()
         return read_data
-    
+
     def dash(self):
         stay = True
         while stay:
             t = read_serial(usb_cdc.console)
             if len(t)>0:
                 print(t)
-        
+
     def read_all(self, page=0, address='all'):
         while not self.i2c.try_lock():
             pass

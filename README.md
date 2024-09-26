@@ -9,15 +9,15 @@ This repo describes PCBs and rp2040 CircuitPython support for TI's [TAC5xxx](htt
 * If multiple TAC5xxx parts with different I2C addresses are present, they are assumed to be wired in parallel for multichannel operation and [configured]( https://docs.google.com/spreadsheets/d/1LnI_OwJfJHtquBkj7qKH8Fg3jmsCv9cRniIS2uqMfjU/edit?usp=sharing) appropriately.  In this mode, each chip uses one time slot
 in the DOUT signal and makes its DOUT Hi-Z at other times.  
 
-* In the example shown here, 4 TAC5212's are connected with BCLK, FSYNC, DOUT, DIN, SCL, and SDA in parallel.  On each chip, the differential DAC outputs are connected to the differential ADC inputs to provide test signals for the ADCs, i.e. OUT1P -> IN1P, OUT1M -> IN1M, OUT2P -> IN2P, OUT2M -> IN2M.
+* In the first example shown here, 4 TAC5212's are connected with BCLK, FSYNC, DOUT, DIN, SCL, and SDA in parallel.  On each chip, the differential DAC outputs are connected to the differential ADC inputs to provide test signals for the ADCs, i.e. OUT1P -> IN1P, OUT1M -> IN1M, OUT2P -> IN2P, OUT2M -> IN2M.
 
 * Chips are mounted on [breakout boards](https://www.pcbway.com/project/shareproject/Breakout_board_for_the_TI_TAC5212_audio_codec_ecc0a61b.html).  KiCad files for these boards are [here](pcb).  Schematic and layout look like this:
 
 <img src="images/tac5_schematic.png" width="480" /> <img src="images/tac5_pcb.png" width="214" />
 
+* The second example shows a loopback test of streaming output and input performed without a codec by connecting DOUT to DIN.  This code depends on extensions to `rp2pio` found in https://github.com/adafruit/circuitpython/pull/9659
 
-
-## Example
+## Codec example
 
 ```python
 Adafruit CircuitPython 9.1.0-beta.3-76-g2f62612186-dirty on 2024-07-18; Adafruit Feather RP2040 with rp2040
@@ -49,3 +49,38 @@ CSV format.  The table below compares the DAC outputs as seen on a scope with th
 | ---------- | ---- |---------- |
 | <img src="images/dac_output_example.png" width="280" />   | | <img src="images/adc_output_example.png" width="500" /> |
 
+## Loopback example
+
+```python
+Adafruit CircuitPython 9.1.0-beta.3-176-g1ab26baf6e-dirty on 2024-09-24; Adafruit Feather RP2040 with rp2040
+>>> import tac5
+>>> t = tac5.TAC5(channels=2, width=8, sample_rate=12000, address=None)
+>>> t.rec(length=10)
+recording...
+>>> t.play(length=10, test='count')
+playing...
+>>> t.show(t.record_once_buffer)
+sample;ch0;ch1
+0;-10;-9
+1;-8;-7
+2;-6;-5
+3;-4;-3
+4;-2;-1
+5;0;1
+6;2;3
+7;4;5
+8;6;7
+9;8;9
+>>> t.show(t.play_once_buffer, shift=False)
+sample;ch0;ch1
+0;-10;-9
+1;-8;-7
+2;-6;-5
+3;-4;-3
+4;-2;-1
+5;0;1
+6;2;3
+7;4;5
+8;6;7
+9;8;9
+>>> 
