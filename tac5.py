@@ -66,6 +66,14 @@ def count_wave(length=100, channels=2, sample_width=None):
             wave[i*channels + c] = int2bits(val, sample_width) << (wave_width-sample_width)
     return wave
 
+def print_tuple(t, format=';'):
+    if format is None:
+        print(t)
+    elif len(format)==1:
+        print(str(t).replace(',', format)[1:-1])
+    else:
+        raise ValueError('Unrecognized format')
+    
 class TAC5():
     """
     >>> import tac5
@@ -75,6 +83,12 @@ class TAC5():
     >>> t.play(length=10, test='count')
     playing...
     >>> t.show(t.record_once_buffer)
+    >>> t = tac5.TAC5(channels=2, width=24, sample_rate=48000, address=None)   
+    >>> t.rec(length=10)
+    recording...
+    >>> t.play(length=10, test='count')
+    playing...
+    >>> t.show(t.record_loop_buffer, slice=slice(0,1), show_time=True, loop=True)
     """
     def __init__(self,
                  address='scan',
@@ -261,37 +275,31 @@ class TAC5():
             self.pcm.pio.background_read(loop=self.record_loop_buffer)
 
 
-    def show(self, buffer, format='csv', shift=True):
-        if format=='csv':
-            print('sample', end=';')
-            for j in range(self.channels-1):
-                print(f'ch{j}', end=';')
-            print(f'ch{self.channels-1}')
-            for i in range(len(buffer)//self.channels):
-                print(i,end=';')
-                for j in range(self.channels-1):
-                    val = buffer[j+i*self.channels]
-                    if shift:
-                        val = val << (32-self.width)
-                    print(bits2int(val>>(32-self.width), self.width), end=';')
-                val = buffer[(self.channels-1)+i*self.channels]
-                if shift:
-                    val = val << (32-self.width)
-                print(bits2int(val>>(32-self.width), self.width))
-
-        elif format=='mu':
-            for i in range(len(buffer)//self.channels):
-                print('(', end='')
-                for j in range(self.channels-1):
-                    val = buffer[j+i*self.channels]
-                    if shift:
-                        val = val << (32-self.width)
-                    print(bits2int(val>>(32-self.width), self.width), end=',')
-                    time.sleep(0.01)
-                val = buffer[(self.channels-1)+i*self.channels]
-                if shift:                    
-                    val = val << (32-self.width)
-                print(bits2int(val>>(32-self.width), self.width), end=')\n')
+    def show(self, buffer, slice=slice(None), format=';', shift=True, show_time=False, loop=False, delay=0):
+        once = True
+        header = ('sample')
+        if show_time:
+            header = ('sample', 'time')
+        else:
+            header = ('sample',)
+        header += tuple([f'ch{j}' for j in range(self.channels)])
+        if shift:
+            rshift = 0
+        else:
+            rshift = 32-self.width
+        print_tuple(header, format)
+        t0 = int(time.monotonic()*1000)
+        while once or loop:
+            for i in range(len(buffer)//self.channels)[slice]:
+                if show_time:
+                    data = (i,int(time.monotonic()*1000)-t0)
+                else:
+                    data = (i,)
+                data += tuple([bits2int(buffer[j+i*self.channels] >> rshift, self.width) for j in range(self.channels)])
+                if delay > 0:
+                    time.sleep(delay)
+                print_tuple(data, format)
+            once = False
 
     def record(self, buffer=None, reset=False, length=None):
         if reset or self.pcm is None:
