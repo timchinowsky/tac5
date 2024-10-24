@@ -76,9 +76,6 @@ class PCM():
         self.pio_instructions = adafruit_pioasm.assemble(self.pio_code)
         self.pio = rp2pio.StateMachine(self.pio_instructions, **self.pio_params)
     
-    def __del__(self):
-        self.pio.deinit()
-
     def status(self):
         print(f"actual sample frequency {self.pio.frequency/self.clock_multiplier/self.channels/self.width:9.1f} Hz")
         print(f"               bit clock {self.pio.frequency/self.clock_multiplier:9.1f} Hz")

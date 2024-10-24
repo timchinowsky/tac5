@@ -42,7 +42,7 @@ def bits2int(value, width):
         value -= (1 << width)
     return value
 
-def octave_wave(length=100, channels=2, sample_width=None, pad_after=25, amplitude=0.7):
+def octave_wave(length=100, channels=2, sample_width=None, pad_after=25, amplitude=0.7, offset=0):
     wave = array.array('L', [0] * (length * channels + pad_after * channels))
     wave_width = 32
     if sample_width is None:
@@ -51,18 +51,18 @@ def octave_wave(length=100, channels=2, sample_width=None, pad_after=25, amplitu
         for i in range(length):
             f = c + 1
             a = 2**(sample_width-1) - 1
-            val = int(a * amplitude * math.sin(i/length * 2 * math.pi * f))
+            val = int(a * amplitude * math.sin(i/length * 2 * math.pi * f)) + offset
             wave[i*channels+c] = int2bits(val, sample_width) << (wave_width-sample_width)
     return wave
 
-def count_wave(length=100, channels=2, sample_width=None):
+def count_wave(length=100, channels=2, sample_width=None, offset=0):
     wave = array.array('L', [0] * (length * channels))
     wave_width = 32
     if sample_width is None:
         sample_width = wave_width
     for c in range(channels):
         for i in range(length):
-            val = (i-(length//2)) * channels + c
+            val = (i-(length//2)) * channels + c + offset
             wave[i*channels + c] = int2bits(val, sample_width) << (wave_width-sample_width)
     return wave
 
@@ -127,11 +127,14 @@ class TAC5():
         self.pcm = None
         self.play_once_buffer = None
         self.play_loop_buffer = None
+        self.play_loop2_buffer = None
         self.record_once_buffer = None
         self.record_loop_buffer = None
+        self.record_loop2_buffer = None
 
-    def __del__(self):
-        del self.pcm
+    def deinit(self):
+        print('Shutting down...')
+        self.pcm.pio.deinit()
 
     def configure(self, address='all'):
         if self.pcm is not None:
@@ -187,7 +190,35 @@ class TAC5():
                         out_pin=self.out_pin,
                         in_pin=self.in_pin)
 
-    def play(self, loop_buffer=None, once_buffer=None, loop=True, once=True, reset=False, length=None, test='octave', end=False):
+    def test(self, length=10, slip_time=10, end=False):
+        if end:
+            self.play(end=True)
+            time.sleep(0.1)
+            self.rec(end=True)
+            time.sleep(0.1)
+        self.rec(length=length)
+        self.play(length=length, test='count')
+        print("\nOnce:")
+        self.show(self.record_once_buffer)
+        print("\nLoop (1):")
+        self.show(self.record_loop_buffer)
+        print("\nLoop (2):")
+        self.show(self.record_loop_buffer)
+        print("\nLoop (3):")
+        self.show(self.record_loop_buffer)
+        t0 = time.monotonic()
+        print(f'\nWatching for slip for {slip_time} seconds...')
+        slip_count = 0
+        last_rec = self.record_loop_buffer[0]
+        while time.monotonic() < t0 + slip_time:
+            r = self.record_loop_buffer[0]
+            if r != last_rec:
+                slip_count += 1
+                last_rec = r
+        print(f'\nSlip: {slip_count}')
+        return slip_count
+
+    def play(self, loop_buffer=None, loop2_buffer=None, once_buffer=None, loop=True, once=True, reset=False, length=None, test='octave', end=False, double_buffer=False):
         if end:
             self.pcm.pio.stop_background_write()
             return
@@ -198,14 +229,25 @@ class TAC5():
             if length is None:
                 if test=='octave':
                     loop_buffer = octave_wave(channels=self.channels, sample_width=self.width)
+                    if double_buffer:
+                        loop2_buffer = octave_wave(channels=self.channels, sample_width=self.width, offset=1)
                 else:
                     loop_buffer = count_wave(channels=self.channels, sample_width=self.width)
+                    if double_buffer:
+                        loop2_buffer = count_wave(channels=self.channels, sample_width=self.width, offset=1)
+
             else:
                 if test=='octave':
                     loop_buffer = octave_wave(channels=self.channels, sample_width=self.width, length=length)
+                    if double_buffer:
+                        loop2_buffer = octave_wave(channels=self.channels, sample_width=self.width, length=length, offset=1)
                 else:
                     loop_buffer = count_wave(channels=self.channels, sample_width=self.width, length=length)
+                    if double_buffer:
+                        loop2_buffer = count_wave(channels=self.channels, sample_width=self.width, length=length, offset=1)
             self.play_loop_buffer = loop_buffer
+            if double_buffer:
+                self.play_loop2_buffer = loop2_buffer
  
         if once_buffer is None:
             if length is None:
@@ -223,14 +265,20 @@ class TAC5():
         print('playing...')
         if once:
             if loop:
-                self.pcm.pio.background_write(once=self.play_once_buffer, loop=self.play_loop_buffer)
+                if double_buffer:
+                    self.pcm.pio.background_write(once=self.play_once_buffer, loop=self.play_loop_buffer, loop2=self.play_loop2_buffer)
+                else:
+                    self.pcm.pio.background_write(once=self.play_once_buffer, loop=self.play_loop_buffer)
             else:
                 self.pcm.pio.background_write(once=self.play_once_buffer)
         elif loop:
-            self.pcm.pio.background_write(loop=self.play_loop_buffer)
+            if double_buffer:
+                self.pcm.pio.background_write(loop=self.play_loop_buffer, loop2=self.play_loop2_buffer)
+            else:
+                self.pcm.pio.background_write(loop=self.play_loop_buffer)
 
 
-    def rec(self, loop_buffer=None, once_buffer=None, loop=True, once=True, reset=False, length=None, end=False):
+    def rec(self, loop_buffer=None, loop2_buffer=None, once_buffer=None, loop=True, once=True, reset=False, length=None, end=False, double_buffer=False):
         if end:
             self.pcm.pio.stop_background_read()
             return
@@ -241,15 +289,28 @@ class TAC5():
             if self.play_loop_buffer is not None and length is None:
                 loop_buffer = array.array('L', [0] * len(self.play_loop_buffer))
                 self.record_loop_buffer = loop_buffer
+                if double_buffer:
+                    loop2_buffer = array.array('L', [0] * len(self.play_loop_buffer))
+                    self.record_loop2_buffer = loop2_buffer
+
             elif length is not None:
                 loop_buffer = array.array('L', [0] * length * self.channels)
                 self.record_loop_buffer = loop_buffer
+                if double_buffer:
+                    loop2_buffer = array.array('L', [0] * length * self.channels)
+                    self.record_loop2_buffer = loop2_buffer
+
             elif loop:
                 raise ValueError('No loop buffer specified!')
+            
         elif loop_buffer is None:
             loop_buffer = self.record_loop_buffer
+            if double_buffer:
+                loop2_buffer = self.record_loop2_buffer
         else:
             self.record_loop_buffer = loop_buffer
+            if double_buffer:
+                self.record_loop2_buffer = loop2_buffer
 
         if (once_buffer is None and self.record_once_buffer is None) or length is not None:
             if self.record_once_buffer is not None and length is None:
@@ -268,11 +329,17 @@ class TAC5():
         print('recording...')
         if once:
             if loop:
-                self.pcm.pio.background_read(once=self.record_once_buffer, loop=self.record_loop_buffer)
+                if double_buffer:
+                    self.pcm.pio.background_read(once=self.record_once_buffer, loop=self.record_loop_buffer, loop2=self.record_loop2_buffer)
+                else:
+                    self.pcm.pio.background_read(once=self.record_once_buffer, loop=self.record_loop_buffer)
             else:
                 self.pcm.pio.background_read(once=self.record_once_buffer)
         elif loop:
-            self.pcm.pio.background_read(loop=self.record_loop_buffer)
+            if double_buffer:
+                self.pcm.pio.background_read(loop=self.record_loop_buffer, loop2=self.record_loop2_buffer)
+            else:
+                self.pcm.pio.background_read(loop=self.record_loop_buffer)
 
 
     def show(self, buffer, slice=slice(None), format=';', shift=True, show_time=False, loop=False, delay=0):
@@ -452,12 +519,26 @@ class TAC5():
         self.i2c.unlock()
         return found
 
+sd = sdcardio.SDCard(board.SPI(), board.D25)
+vfs = storage.VfsFat(sd)
+storage.mount(vfs, '/')
+
 def wav():
-    sd = sdcardio.SDCard(board.SPI(), board.D25)
-    vfs = storage.VfsFat(sd)
-    storage.mount(vfs, '/')
     print(os.listdir('/'))
     return audiocore.WaveFile("/piau.wav")
+
+def write_test(segment=1000, n=1000):
+    print(os.listdir('/'))
+    f = open('/foo.txt', 'w')
+    l = [i%255 for i in range(segment)]
+    b = bytes(l)
+    t0 = time.monotonic()
+    for i in range(n):
+        f.write(b)
+    t1 = time.monotonic()    
+    f.close()
+    print(os.stat('/foo.txt'))
+    print(f'wrote {segment*n} bytes in {t1-t0} seconds ({segment*n/(t1-t0)} bytes/s).')
 
 def read_serial(serial):
     available = serial.in_waiting
