@@ -341,6 +341,10 @@ class TAC5():
             else:
                 self.pcm.pio.background_read(loop=self.record_loop_buffer)
 
+    def tape(self, filename):
+        with open(filename, 'w') as f:
+            while True:
+                f.write(self.pcm.pio.last_read)
 
     def show(self, buffer, slice=slice(None), format=';', shift=True, show_time=False, loop=False, delay=0):
         once = True
