@@ -42,7 +42,7 @@ def bits2int(value, width):
         value -= (1 << width)
     return value
 
-def octave_wave(length=100, channels=2, sample_width=None, pad_after=25, amplitude=0.7, offset=0):
+def octave_wave(length=400, channels=2, sample_width=None, pad_after=25, amplitude=0.7, offset=0):
     wave = array.array('L', [0] * (length * channels + pad_after * channels))
     wave_width = 32
     if sample_width is None:
@@ -55,7 +55,7 @@ def octave_wave(length=100, channels=2, sample_width=None, pad_after=25, amplitu
             wave[i*channels+c] = int2bits(val, sample_width) << (wave_width-sample_width)
     return wave
 
-def count_wave(length=100, channels=2, sample_width=None, offset=0):
+def count_wave(length=400, channels=2, sample_width=None, offset=0):
     wave = array.array('L', [0] * (length * channels))
     wave_width = 32
     if sample_width is None:
@@ -97,8 +97,8 @@ class TAC5():
                  clk_pin=board.D5, # sync will be one higher, e.g. D6
                  out_pin=board.D9,
                  in_pin=board.D10,
-                 width=16,
-                 sample_rate=48000
+                 width=32,
+                 sample_rate=16000
                 ):
         if address is not None:
             if i2c is not None:
@@ -218,7 +218,7 @@ class TAC5():
         print(f'\nSlip: {slip_count}')
         return slip_count
 
-    def play(self, loop_buffer=None, loop2_buffer=None, once_buffer=None, loop=True, once=True, reset=False, length=None, test='octave', end=False, double_buffer=False):
+    def play(self, loop_buffer=None, loop2_buffer=None, once_buffer=None, loop=True, once=True, reset=False, length=None, test='octave', end=False, double_buffer=True, swap=False):
         if end:
             self.pcm.pio.stop_background_write()
             return
@@ -266,17 +266,24 @@ class TAC5():
         if once:
             if loop:
                 if double_buffer:
-                    self.pcm.pio.background_write(once=self.play_once_buffer, loop=self.play_loop_buffer, loop2=self.play_loop2_buffer)
+                    self.pcm.pio.background_write(once=self.play_once_buffer, loop=self.play_loop_buffer, loop2=self.play_loop2_buffer, swap=swap)
                 else:
-                    self.pcm.pio.background_write(once=self.play_once_buffer, loop=self.play_loop_buffer)
+                    self.pcm.pio.background_write(once=self.play_once_buffer, loop=self.play_loop_buffer, swap=swap)
             else:
-                self.pcm.pio.background_write(once=self.play_once_buffer)
+                self.pcm.pio.background_write(once=self.play_once_buffer, swap=swap)
         elif loop:
             if double_buffer:
-                self.pcm.pio.background_write(loop=self.play_loop_buffer, loop2=self.play_loop2_buffer)
+                self.pcm.pio.background_write(loop=self.play_loop_buffer, loop2=self.play_loop2_buffer, swap=swap)
             else:
-                self.pcm.pio.background_write(loop=self.play_loop_buffer)
+                self.pcm.pio.background_write(loop=self.play_loop_buffer, swap=swap)
 
+    def play_raw(self, filename):
+        with open(filename, 'r') as f:
+            while True:
+                try:
+                    f.readinto(self.pcm.pio.last_write)
+                except:
+                    pass
 
     def rec(self, loop_buffer=None, loop2_buffer=None, once_buffer=None, loop=True, once=True, reset=False, length=None, end=False, double_buffer=False):
         if end:
