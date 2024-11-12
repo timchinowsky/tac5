@@ -8,13 +8,16 @@ import math
 import os
 import sdcardio
 import storage
-
+import digitalio
 
 import storage
 import time
 import usb_cdc
 
 import pcm
+
+status = digitalio.DigitalInOut(board.A1)
+status.direction = digitalio.Direction.OUTPUT
 
 def reverse(obj):
     for i in range(len(obj)-1, -1, -1):
@@ -42,29 +45,63 @@ def bits2int(value, width):
         value -= (1 << width)
     return value
 
-def octave_wave(length=400, channels=2, sample_width=None, pad_after=25, amplitude=0.7, offset=0):
-    wave = array.array('L', [0] * (length * channels + pad_after * channels))
-    wave_width = 32
-    if sample_width is None:
-        sample_width = wave_width
-    for c in range(channels):
-        for i in range(length):
-            f = c + 1
-            a = 2**(sample_width-1) - 1
-            val = int(a * amplitude * math.sin(i/length * 2 * math.pi * f)) + offset
-            wave[i*channels+c] = int2bits(val, sample_width) << (wave_width-sample_width)
-    return wave
+def new_buffer(length=400, channels=2, sample_width=None, wave_width=32, offset=0, init=None, header=0):
+    if wave_width==32:
+        wave = array.array('L', [offset] * (length * channels + header))
+    elif wave_width==16:
+        wave = array.array('H', [offset] * (length * channels + header))
+    else:
+        raise(ValueError, "unsupported wave_width")
 
-def count_wave(length=400, channels=2, sample_width=None, offset=0):
-    wave = array.array('L', [0] * (length * channels))
-    wave_width = 32
-    if sample_width is None:
-        sample_width = wave_width
-    for c in range(channels):
-        for i in range(length):
-            val = (i-(length//2)) * channels + c + offset
-            wave[i*channels + c] = int2bits(val, sample_width) << (wave_width-sample_width)
-    return wave
+    if init == 'zero':
+        return wave
+    if init == 'octave':
+        pad_after = 25
+        amplitude = 0.7
+        if sample_width is None:
+            sample_width = wave_width
+        for c in range(channels):
+            for i in range(length-pad_after-header):
+                f = c + 1
+                a = 2**(sample_width-1) - 1
+                val = int(a * amplitude * math.sin(i/(length - pad_after - header) * 2 * math.pi * f)) + offset
+                wave[i*channels+c+header] = int2bits(val, sample_width) << (wave_width-sample_width)
+        return wave
+    if init == 'sine':
+        amplitude = 0.7
+        if sample_width is None:
+            sample_width = wave_width
+        for c in range(channels):
+            for i in range(length-header):
+                f = 1
+                a = 2**(sample_width-1) - 1
+                val = int(a * amplitude * math.sin(i/(length - header) * 2 * math.pi * f)) + offset
+                wave[i*channels+c+header] = int2bits(val, sample_width) << (wave_width-sample_width)
+        return wave
+    elif init == 'count':
+        if sample_width is None:
+            sample_width = wave_width
+        for c in range(channels):
+            for i in range(length-header):
+                val = (i-(length//2)) * channels + c + offset
+                wave[i*channels + c + header] = int2bits(val, sample_width) << (wave_width-sample_width)
+        return wave
+    else:
+        return wave
+
+def ring_modulator(length=256, channels=8, sample_width=16, wave_width=16, init='sine', header=2):
+    process = new_buffer(length=length, channels=channels, sample_width=sample_width,
+                         wave_width=wave_width, init=init, header=header)
+    process[0] = 1
+    process[1] = 0
+    return process
+
+def echo(length=256, channels=8, sample_width=16, wave_width=16, init='zero', header=2):
+    process = new_buffer(length=length, channels=channels, sample_width=sample_width,
+                         wave_width=wave_width, init=init, header=header)
+    process[0] = 2
+    process[1] = 0
+    return process
 
 def print_tuple(t, format=';'):
     if format is None:
@@ -218,7 +255,9 @@ class TAC5():
         print(f'\nSlip: {slip_count}')
         return slip_count
 
-    def play(self, loop_buffer=None, loop2_buffer=None, once_buffer=None, loop=True, once=True, reset=False, length=None, test='octave', end=False, double_buffer=True, swap=False):
+    def play(self, filename=None, loop_buffer=None, loop2_buffer=None, once_buffer=None, loop=True, once=True, 
+             reset=False, length=None, init='zero', end=False, double_buffer=True, swap=False, repeat=True,
+             width=None, process=None):
         if end:
             self.pcm.pio.stop_background_write()
             return
@@ -227,39 +266,22 @@ class TAC5():
 
         if loop_buffer is None:
             if length is None:
-                if test=='octave':
-                    loop_buffer = octave_wave(channels=self.channels, sample_width=self.width)
-                    if double_buffer:
-                        loop2_buffer = octave_wave(channels=self.channels, sample_width=self.width, offset=1)
-                else:
-                    loop_buffer = count_wave(channels=self.channels, sample_width=self.width)
-                    if double_buffer:
-                        loop2_buffer = count_wave(channels=self.channels, sample_width=self.width, offset=1)
-
+                loop_buffer = new_buffer(channels=self.channels, sample_width=width, wave_width=self.width, init=init)
+                if double_buffer:
+                    loop2_buffer = new_buffer(channels=self.channels, sample_width=width, wave_width=self.width, init=init, offset=1)
             else:
-                if test=='octave':
-                    loop_buffer = octave_wave(channels=self.channels, sample_width=self.width, length=length)
-                    if double_buffer:
-                        loop2_buffer = octave_wave(channels=self.channels, sample_width=self.width, length=length, offset=1)
-                else:
-                    loop_buffer = count_wave(channels=self.channels, sample_width=self.width, length=length)
-                    if double_buffer:
-                        loop2_buffer = count_wave(channels=self.channels, sample_width=self.width, length=length, offset=1)
+                loop_buffer = new_buffer(channels=self.channels, sample_width=width, wave_width=self.width, length=length, init=init)
+                if double_buffer:
+                        loop2_buffer = new_buffer(channels=self.channels, sample_width=width, wave_width=self.width, length=length, init=init, offset=1)
             self.play_loop_buffer = loop_buffer
             if double_buffer:
                 self.play_loop2_buffer = loop2_buffer
  
         if once_buffer is None:
             if length is None:
-                if test=='octave':
-                    once_buffer = octave_wave(channels=self.channels, sample_width=self.width)
-                else:
-                    once_buffer = count_wave(channels=self.channels, sample_width=self.width)
+                once_buffer = new_buffer(channels=self.channels, sample_width=width, wave_width=self.width, init=init)
             else:
-                if test=='octave':
-                    once_buffer = octave_wave(channels=self.channels, sample_width=self.width, length=length)
-                else:
-                    once_buffer = count_wave(channels=self.channels, sample_width=self.width, length=length)
+                once_buffer = new_buffer(channels=self.channels, sample_width=width, wave_width=self.width, length=length, init=init)
             self.play_once_buffer = once_buffer
 
         print('playing...')
@@ -277,13 +299,25 @@ class TAC5():
             else:
                 self.pcm.pio.background_write(loop=self.play_loop_buffer, swap=swap)
 
-    def play_raw(self, filename):
-        with open(filename, 'r') as f:
-            while True:
-                try:
-                    f.readinto(self.pcm.pio.last_write)
-                except:
-                    pass
+        if filename is not None:
+            n = -1
+            print('opening', filename, '...')
+            with open(filename, 'r') as f:
+                while repeat or n == -1:
+                    while n != 0:
+                        b = self.pcm.pio.last_write
+                        if len(b) > 0:
+                            status.value = True
+                            n = f.readinto(b)
+                            status.value = False
+                            status.value = True
+                            if process is not None:
+                                self.pcm.pio.process(b, parameters=process)
+                            status.value = False
+                    if repeat:
+                        print('repeating...')
+                        f.seek(0)
+                        n = -1
 
     def rec(self, loop_buffer=None, loop2_buffer=None, once_buffer=None, loop=True, once=True, reset=False, length=None, end=False, double_buffer=False):
         if end:
