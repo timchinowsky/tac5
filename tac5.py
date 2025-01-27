@@ -45,13 +45,20 @@ def bits2int(value, width):
         value -= (1 << width)
     return value
 
+
+# wave_width is the width of the datatype used to store samples in memory, and must be 32 or 16 bits
+# sample_width is the width of the samples sent to the TAC5, which typically matches the width of the 
+# TAC5 serial interface.  Samples sent to the TAC5 are left-justified in memory, so if for instance
+# sample_width is 8 but wave_width is 32, samples to be sent to the TAC5 are left-shifted 24 bits
+# before being stored in memory.
+
 def new_buffer(length=400, channels=2, sample_width=None, wave_width=32, offset=0, init=None, header=0):
     if wave_width==32:
         wave = array.array('L', [offset] * (length * channels + header))
     elif wave_width==16:
         wave = array.array('H', [offset] * (length * channels + header))
     else:
-        raise(ValueError, "unsupported wave_width")
+        raise ValueError("unsupported wave_width")
 
     if init == 'zero':
         return wave
@@ -254,6 +261,9 @@ class TAC5():
                 last_rec = r
         print(f'\nSlip: {slip_count}')
         return slip_count
+    
+    def play_audiosample(self, sample, channel_select):
+        self.pcm.pio.audiosamples.append((sample, channel_select))
 
     def play(self, filename=None, loop_buffer=None, loop2_buffer=None, once_buffer=None, loop=True, once=True, 
              reset=False, length=None, init='zero', end=False, double_buffer=True, swap=False, repeat=True,
@@ -264,24 +274,26 @@ class TAC5():
         if reset or self.pcm is None:
             self.configure()
 
+        if width is None:
+            width = self.width
         if loop_buffer is None:
             if length is None:
-                loop_buffer = new_buffer(channels=self.channels, sample_width=width, wave_width=self.width, init=init)
+                loop_buffer = new_buffer(channels=self.channels, sample_width=width, init=init)
                 if double_buffer:
-                    loop2_buffer = new_buffer(channels=self.channels, sample_width=width, wave_width=self.width, init=init, offset=1)
+                    loop2_buffer = new_buffer(channels=self.channels, sample_width=width, init=init, offset=1)
             else:
-                loop_buffer = new_buffer(channels=self.channels, sample_width=width, wave_width=self.width, length=length, init=init)
+                loop_buffer = new_buffer(channels=self.channels, sample_width=width, length=length, init=init)
                 if double_buffer:
-                        loop2_buffer = new_buffer(channels=self.channels, sample_width=width, wave_width=self.width, length=length, init=init, offset=1)
+                        loop2_buffer = new_buffer(channels=self.channels, sample_width=width, length=length, init=init, offset=1)
             self.play_loop_buffer = loop_buffer
             if double_buffer:
                 self.play_loop2_buffer = loop2_buffer
  
         if once_buffer is None:
             if length is None:
-                once_buffer = new_buffer(channels=self.channels, sample_width=width, wave_width=self.width, init=init)
+                once_buffer = new_buffer(channels=self.channels, sample_width=width, init=init)
             else:
-                once_buffer = new_buffer(channels=self.channels, sample_width=width, wave_width=self.width, length=length, init=init)
+                once_buffer = new_buffer(channels=self.channels, sample_width=width, length=length, init=init)
             self.play_once_buffer = once_buffer
 
         print('playing...')
@@ -564,9 +576,9 @@ class TAC5():
         self.i2c.unlock()
         return found
 
-sd = sdcardio.SDCard(board.SPI(), board.D25)
-vfs = storage.VfsFat(sd)
-storage.mount(vfs, '/')
+# sd = sdcardio.SDCard(board.SPI(), board.D25)
+# vfs = storage.VfsFat(sd)
+# storage.mount(vfs, '/')
 
 def wav():
     print(os.listdir('/'))
