@@ -1,8 +1,8 @@
 # tac5
 
-This repo describes PCBs and rp2040/2350 CircuitPython support for TI's [TAC5xxx](https://www.ti.com/product/TAC5212) audio codecs.  This code depends on extensions to CircuitPython's `rp2pio` library found in https://github.com/adafruit/circuitpython/pull/9659.
+This repo describes PCBs and rp2040/rp2350 CircuitPython support for TI's [TAC5xxx](https://www.ti.com/product/TAC5212) audio codecs.  This code depends on extensions to CircuitPython's `rp2pio` library found in https://github.com/adafruit/circuitpython/pull/9659.
 
-* [`pcm.py`](pcm.py) uses the rp2040/2350 PIO to implement a PCM interface to the TAC5 which supports arbitrary numbers of channels, word sizes, and sample rates.
+* [`pcm.py`](pcm.py) uses the rp2 PIO to implement a PCM interface to the TAC5 which supports arbitrary numbers of channels, word sizes, and sample rates.
 
 * [`tac5.py`](tac5.py) implements a TAC5 class which knows how to initialize the TAC5xxx over I2C, write to its DACs, and read from its ADCs.
 
